@@ -1,82 +1,400 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>BabylonJS Rain and Grass</title>
-  <script src="https://cdn.babylonjs.com/babylon.js"></script>
-</head>
-<body>
-  <canvas id="renderCanvas" style="width:100%;height:100%"></canvas>
+  <head>
+    <title>BabylonJS Rain and Grass</title>
+    <!-- Load the Babylon.js library from CDN -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  </head>
 
-  <!-- Rain Vertex Shader -->
-  <script id="vertexShaderCode" type="x-shader/x-vertex">
-    /* … your existing rain vertex GLSL … */
-  </script>
-  <!-- Rain Fragment Shader -->
-  <script id="fragmentShaderCode" type="x-shader/x-fragment">
-    /* … your existing rain fragment GLSL … */
-  </script>
-  <!-- Grass Vertex Shader -->
-  <script id="grassVertexShaderCode" type="x-shader/x-vertex">
-    /* … your existing grass vertex GLSL … */
-  </script>
-  <!-- Grass Fragment Shader -->
-  <script id="grassFragmentShaderCode" type="x-shader/x-fragment">
-    /* … your existing grass fragment GLSL … */
-  </script>
+  <body>
+    <canvas id="renderCanvas" style="width: 100%; height: 100%"></canvas>
+    <audio id="ambientAudio" src="smooth-rain-on-grass-high-quality-176818.mp3" loop></audio>
+    <!-- Rain Vertex Shader -->
+    <script id="vertexShaderCode" type="x-shader/x-vertex">
+            precision highp float;
 
-  <!-- Main JavaScript -->
-  <script>
-    var canvas = document.getElementById("renderCanvas");
-    var engine = new BABYLON.Engine(canvas, true);
-    var rainSound, grassSound;
+      attribute vec3 position;
+      attribute vec2 uv;
 
-    var createScene = function () {
-      var scene = new BABYLON.Scene(engine);
+      varying vec2 vUV;
+      varying float vAlpha;
 
-      // … your existing scene setup (camera, light, ground, rain/grass meshes) …
+      uniform float time;
+      uniform mat4 worldViewProjection;
 
-      // 1) Load rain sound (autoplay turned off)
-      rainSound = new BABYLON.Sound("rain", "rainsounds.mp3", scene, null, {
-        loop: true,
-        autoplay: false,
-        volume: 0.9
+            void main(void) {
+                vec3 pos = position;
+
+                // Move rain downward over time
+                pos.y -= mod(time * 2.0, 12.0);
+
+                // Wrap rain back to top if it falls too low
+                if (pos.y < -1.0) {
+                    pos.y += 12.0;
+                }
+
+                // Set transparency outside of visible range
+                if (pos.y < 0.0 || pos.y > 10.0) {
+                    vAlpha = 0.0;
+                } else {
+                    vAlpha = 1.0;
+                }
+
+          vUV = uv;
+          gl_Position = worldViewProjection * vec4(pos, 1.0);
+      }
+    </script>
+
+    <!-- Rain Fragment Shader -->
+    <script id="fragmentShaderCode" type="x-shader/x-fragment">
+      precision highp float;
+
+            varying vec2 vUV;
+            varying float vAlpha;
+
+            uniform sampler2D textureSampler;
+
+      void main(void) {
+          vec4 texColor = texture2D(textureSampler, vUV);
+
+                // Discard pixels outside the center circle
+                float dist = distance(vUV, vec2(0.5, 0.5));
+                if (dist > 0.5) discard;
+
+                // Tint rain blue
+                vec3 blueTint = vec3(0.5, 0.6, 1.0);
+                gl_FragColor = vec4(texColor.rgb * blueTint, texColor.a * vAlpha);
+            }
+    </script>
+
+    <!-- Grass Vertex Shader -->
+    <script id="grassVertexShaderCode" type="x-shader/x-vertex">
+      precision highp float;
+
+      attribute vec3 position;
+
+      uniform float time;
+      uniform mat4 worldViewProjection;
+      uniform sampler2D noiseTexture;
+
+      varying float vHeight; // pass height to fragment shader
+
+      void main(void) {
+          vec3 pos = position;
+
+          // Sample noise texture based on xz position
+          vec2 noiseUV = pos.xz * 0.1; // scale down noise lookup
+          float noise = texture2D(noiseTexture, noiseUV).r; // only need red channel
+
+          // Add noise into the sway
+          float sway = sin(time + pos.x * 5.0 + pos.z * 5.0 + noise * 10.0) * 0.2 * pos.y;
+
+          pos.x += sway;
+
+          // Pass height to fragment shader
+          vHeight = pos.y;
+
+          gl_Position = worldViewProjection * vec4(pos, 1.0);
+      }
+    </script>
+
+    <!-- Grass Fragment Shader -->
+    <script id="grassFragmentShaderCode" type="x-shader/x-fragment">
+      precision highp float;
+
+      varying float vHeight;
+
+      void main(void) {
+          // Dark green at bottom, lighter green at top
+          vec3 bottomColor = vec3(0.1, 0.4, 0.1);
+          vec3 topColor = vec3(0.3, 0.7, 0.3);
+
+          // Mix color based on height
+          vec3 finalColor = mix(bottomColor, topColor, clamp(vHeight * 2.0, 0.0, 1.0));
+
+          gl_FragColor = vec4(finalColor, 1.0);
+      }
+    </script>
+
+    <!-- Main JavaScript -->
+    <script>
+      var canvas = document.getElementById("renderCanvas");
+      var engine = new BABYLON.Engine(canvas, true);
+      var rainSound;
+
+      var createScene = function () {
+        var scene = new BABYLON.Scene(engine);
+
+        // Create camera
+        var camera = new BABYLON.FreeCamera(
+          "camera1",
+          new BABYLON.Vector3(0, 5, -15),
+          scene
+        );
+        camera.setTarget(BABYLON.Vector3.Zero());
+        camera.attachControl(canvas, true);
+
+        // Create light
+        var light = new BABYLON.HemisphericLight(
+          "light",
+          new BABYLON.Vector3(0, 1, 0),
+          scene
+        );
+        light.intensity = 0.7;
+
+        // Create ground and set brown color
+        var ground = BABYLON.MeshBuilder.CreateGround(
+          "ground",
+          { width: 20, height: 20 },
+          scene
+        );
+        var groundMaterial = new BABYLON.StandardMaterial(
+          "groundMaterial",
+          scene
+        );
+        groundMaterial.diffuseColor = new BABYLON.Color3(0.4, 0.26, 0.13);
+        ground.material = groundMaterial;
+
+        // Load rain sound
+        rainSound = new BABYLON.Sound("rain", "rainsounds.mp3", scene, null, {
+          loop: true,
+          autoplay: true,
+          volume: 0.9,
+        });
+
+        // Create rain mesh
+        var rain = createRainMesh(scene);
+
+        // Create rain shader
+        var rainShaderMaterial = new BABYLON.ShaderMaterial(
+          "rainShader",
+          scene,
+          {
+            vertexSource:
+              document.getElementById("vertexShaderCode").textContent,
+            fragmentSource:
+              document.getElementById("fragmentShaderCode").textContent,
+          },
+          {
+            attributes: ["position", "uv"],
+            uniforms: ["worldViewProjection", "time", "textureSampler"],
+            needAlphaBlending: true,
+          }
+        );
+        rainShaderMaterial.alpha = 0.5;
+        rain.material = rainShaderMaterial;
+
+        // Load raindrop texture
+        var raindropTexture = new BABYLON.Texture("raindrop.jpeg", scene);
+        rainShaderMaterial.setTexture("textureSampler", raindropTexture);
+
+        // Create grass mesh
+        //var grass = createGrassMesh(scene);
+        var grass = createGrassField(scene, 8000, 10);
+
+        // Create grass shader
+        var grassShaderMaterial = new BABYLON.ShaderMaterial(
+          "grassShader",
+          scene,
+          {
+            vertexSource: document.getElementById("grassVertexShaderCode")
+              .textContent,
+            fragmentSource: document.getElementById("grassFragmentShaderCode")
+              .textContent,
+          },
+          {
+            attributes: ["position"],
+            uniforms: ["worldViewProjection", "time"],
+          }
+        );
+        grass.material = grassShaderMaterial;
+
+        // Animate time for shaders
+        var startTime = Date.now();
+        scene.registerBeforeRender(function () {
+          var currentTime = (Date.now() - startTime) * 0.002;
+          rainShaderMaterial.setFloat("time", currentTime);
+          grassShaderMaterial.setFloat("time", currentTime);
+        });
+
+        return scene;
+      };
+
+      // Create rain triangles
+      function createRainMesh(scene) {
+        var vertexData = new BABYLON.VertexData();
+        var positions = [],
+          indices = [],
+          uvs = [];
+        var index = 0;
+
+        for (var i = 0; i < 100; i++) {
+          var cx = Math.random() * 10 - 5;
+          var cy = Math.random() * 10;
+          var cz = Math.random() * 10 - 5;
+
+          var size = 0.14;
+
+          positions.push(cx, cy, cz);
+          positions.push(cx + size, cy, cz);
+          positions.push(cx, cy + size, cz);
+
+          uvs.push(0, 0);
+          uvs.push(1, 0);
+          uvs.push(0, 1);
+
+          indices.push(index, index + 1, index + 2);
+          index += 3;
+        }
+
+        vertexData.positions = positions;
+        vertexData.indices = indices;
+        vertexData.uvs = uvs;
+
+        var mesh = new BABYLON.Mesh("rainMesh", scene);
+        vertexData.applyToMesh(mesh, true);
+        return mesh;
+      }
+
+      function createCustomGrassBlade() {
+        var vertexData = new BABYLON.VertexData();
+
+        var positions = [
+          0, 0, 0, 0.2, 0, 0, 0.2, 1.0, 0, 0, 1.0, 0, 0.15, 1.9, 0, 0.05, 1.9,
+          0, 0.1, 2.8, 0, 0.07, 2.8, 0, 0.08, 3.6, 0,
+        ];
+
+        var indices = [
+          0, 1, 2, 0, 2, 3, 3, 2, 4, 3, 4, 5, 5, 4, 6, 5, 6, 7, 7, 6, 8,
+        ];
+
+        var blade = new BABYLON.Mesh("blade", scene);
+        var vertexData = new BABYLON.VertexData();
+        vertexData.positions = positions;
+        vertexData.indices = indices;
+        vertexData.applyToMesh(blade, true);
+
+        return blade;
+      }
+
+      // Create grass blades
+      function createGrassMesh(scene) {
+        var blade = createCustomGrassBlade();
+        blade.setEnabled(false);
+
+        var vertexData = new BABYLON.VertexData();
+        var positions = [];
+        var indices = [];
+        var index = 0;
+
+        for (var i = 0; i < 22000; i++) {
+          var baseX = Math.random() * 20 - 10;
+          var baseZ = Math.random() * 20 - 10;
+          var height = 0.5 + Math.random() * 0.5;
+          var width = 0.05;
+
+          positions.push(baseX, 0, baseZ);
+          positions.push(baseX + width, 0, baseZ);
+          positions.push(baseX, height, baseZ);
+          positions.push(baseX + width, height, baseZ);
+
+          indices.push(index, index + 1, index + 2);
+          indices.push(index + 1, index + 3, index + 2);
+          index += 4;
+        }
+
+        vertexData.positions = positions;
+        vertexData.indices = indices;
+
+        var mesh = new BABYLON.Mesh("grassMesh", scene);
+        vertexData.applyToMesh(mesh, true);
+        return mesh;
+      }
+
+      function createGrassField(scene, bladeCount, radius) {
+        var blade = createCustomGrassBlade();
+        blade.setEnabled(false);
+
+        var positions = [];
+        var indices = [];
+        var currentIndex = 0;
+
+        for (var i = 0; i < bladeCount; i++) {
+          var angle = Math.random() * Math.PI * 2;
+          var distance = Math.random() * radius;
+          var x = Math.cos(angle) * distance;
+          var z = Math.sin(angle) * distance;
+          var y = 0;
+
+          // random rotation
+          var rotation = Math.random() * Math.PI * 2;
+          var cosRot = Math.cos(rotation);
+          var sinRot = Math.sin(rotation);
+
+          // random scale to add variation in height
+          var scaleX = (0.8 + Math.random() * 0.4) * 0.5; //0.5 makes the blade mesh smaller
+          var scaleY = (0.8 + Math.random() * 0.5) * 0.5;
+
+          var bladePositions = blade.getVerticesData(
+            BABYLON.VertexBuffer.PositionKind
+          );
+
+          for (var j = 0; j < bladePositions.length; j += 3) {
+            var px = bladePositions[j] * scaleX;
+            var py = bladePositions[j + 1] * scaleY;
+            var pz = bladePositions[j + 2];
+
+            // rotate blades
+            var rotatedX = px * cosRot - pz * sinRot;
+            var rotatedZ = px * sinRot + pz * cosRot;
+
+            // translate
+            positions.push(rotatedX + x, py + y, rotatedZ + z);
+          }
+
+          var bladeIndices = blade.getIndices();
+          for (var j = 0; j < bladeIndices.length; j++) {
+            indices.push(bladeIndices[j] + currentIndex);
+          }
+
+          currentIndex += bladePositions.length / 3;
+        }
+
+        var vertexData = new BABYLON.VertexData();
+        vertexData.positions = positions;
+        vertexData.indices = indices;
+
+        var grassField = new BABYLON.Mesh("grassField", scene);
+        vertexData.applyToMesh(grassField, true);
+
+        return grassField;
+      }
+
+      // Create and render scene
+      var scene = createScene();
+      engine.runRenderLoop(function () {
+        scene.render();
       });
 
-      // 2) Load grass sound (new!)
-      grassSound = new BABYLON.Sound("grass", "grassSounds.mp3", scene, null, {
-        loop: true,
-        autoplay: false,
-        volume: 0.7
+      // Handle window resize
+      window.addEventListener("resize", function () {
+        engine.resize();
       });
 
-      // … the rest of your createScene (rainShaderMaterial, grassShaderMaterial, animation loop) …
-
-      return scene;
-    };
-
-    // … your existing createRainMesh, createGrassMesh, etc. …
-
-    var scene = createScene();
-    engine.runRenderLoop(function () {
-      scene.render();
-    });
-    window.addEventListener("resize", function () {
-      engine.resize();
-    });
-
-    // PLAY BOTH SOUNDS ON FIRST CLICK
-    var firstClick = true;
-    window.addEventListener("click", function () {
-      if (firstClick) {
+      // Play rain sound on user click
+      window.addEventListener("click", function () {
         if (rainSound && !rainSound.isPlaying) {
           rainSound.play();
         }
-        if (grassSound && !grassSound.isPlaying) {
-          grassSound.play();
-        }
-        firstClick = false;
+      });
+       const ambient = document.getElementById('ambientAudio');
+    let started = false;
+    window.addEventListener('click', () => {
+      if (!started) {
+        ambient.play().catch(console.error);
+        started = true;
       }
     });
-  </script>
-</body>
+    </script>
+  </body>
 </html>
